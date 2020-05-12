@@ -1,0 +1,65 @@
+<div class="container">
+  <div class="page-header">
+
+  </div>
+  <div class="row">
+    <div class="col-md-5">
+      <label class="control-label" for="name">Name</label>
+      <div class="row">
+        <div class="col-md-6">
+          <input id="name" name="name" #name class="form-control" type="text"
+                (keydown.enter)="registerFN()" />
+        </div>
+
+        <div class="col-md-6 text-right"  *ngIf="disableButtonRegister==false">
+
+          <button id="register" #register class="btn btn-primary" (click)="registerFN()"><span
+            class="glyphicon glyphicon-plus"></span> Register</button>
+        </div>
+        <div class="col-md-6 text-right"  *ngIf="disableButtonRegister==true">
+
+          <button  class="btn btn-primary" disabled="true" ><span
+            class="glyphicon glyphicon-plus"></span> Register</button>
+        </div>
+      </div>
+
+      <br /> <br /> <label class="control-label" for="peer">Peer</label>
+      <div class="row">
+        <div class="col-md-6">
+          <input id="peer" name="peer" #peer class="form-control" type="text"
+                 (keydown.enter)="callFN();">
+        </div>
+        <div class="col-md-6 text-right">
+
+          <button id="call" #call class="btn btn-success" *ngIf="disableButtonCall==true"  (click)="callFN()"><span
+            class="glyphicon glyphicon-play"></span> Call</button>
+
+          <button  class="btn btn-success" *ngIf="disableButtonCall==false" disabled="true"><span
+            class="glyphicon glyphicon-play" ></span> Call</button>
+
+          <button id="terminate" #terminate  *ngIf="disableButtonTerminate==true"
+                                                                  class="btn btn-danger" (click)="stop(false)"><span
+          class="glyphicon glyphicon-stop" ></span> Stop</button>
+          <button *ngIf="disableButtonTerminate==false"
+                  disabled="true"          class="btn btn-danger"  disabled="true"><span
+          class="glyphicon glyphicon-stop" ></span> Stop</button>
+        </div>
+      </div>
+      <br /> <label class="control-label" for="console">Console</label><br>
+      <br>
+      <div id="console" class="democonsole">
+        <ul></ul>
+      </div>
+    </div>
+    <div class="col-md-7">
+      <div id="videoBig">
+        <video id="videoOutput" #videoOutput autoplay width="640px" height="480px"
+               poster="assets/img/webrtc.png"></video>
+      </div>
+      <div id="videoSmall">
+        <video id="videoInput" #videoInput autoplay width="240px" height="180px"
+               poster="assets/img/webrtc.png"></video>
+      </div>
+    </div>
+  </div>
+</div>
