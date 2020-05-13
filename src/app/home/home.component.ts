@@ -17,11 +17,12 @@ export class HomeComponent implements OnInit , OnDestroy {
   disableButtonCall1 = false;
   disableButtonTerminate1 = false;
   disableButtonRegister1 = false;
-   ws: any;
+  ws:any
 
   constructor(private webrtcserviceService: WebrtcserviceService) {
-    this.ws = new WebSocket('wss://' + location.host + '/call');
-    this.webrtcserviceService.setWebSocket(this.ws);
+   console.log('con called ***********************************');
+   this.ws = new WebSocket('wss://' + location.host + '/call');
+   this.webrtcserviceService.setWebSocket(this.ws);
   }
 
   @ViewChild('register',{ static: true }) registerid: ElementRef;
@@ -65,7 +66,7 @@ export class HomeComponent implements OnInit , OnDestroy {
         default:
           console.log('Unrecognized message', parsedMessage);
       }
-    }
+    };
   }
 
 

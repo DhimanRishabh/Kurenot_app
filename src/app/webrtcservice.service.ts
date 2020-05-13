@@ -85,15 +85,15 @@ export class WebrtcserviceService {
       let options = {
         localVideo : this.videoInput,
         remoteVideo : this.videoOutput,
-        onicecandidate : this.onIceCandidate,
-        onerror : this.onError
+        onicecandidate : this.onIceCandidate.bind(this),
+        onerror : this.onError.bind(this)
       }
       this.webRtcPeer = WebRtcPeer.WebRtcPeerSendrecv(options,
         error => {
           if (error) {
             return console.log(error);
           }
-          this.webRtcPeer.generateOffer(this.onOfferIncomingCall);
+          this.webRtcPeer.generateOffer(this.onOfferIncomingCall.bind(this));
         });
 
     } else {
@@ -154,15 +154,15 @@ export class WebrtcserviceService {
     let options = {
       localVideo : this.videoInput,
       remoteVideo : this.videoOutput,
-      onicecandidate : this.onIceCandidate,
-      onerror : this.onError
+      onicecandidate : this.onIceCandidate.bind(this),
+      onerror : this.onError.bind(this)
     }
     this.webRtcPeer = WebRtcPeer.WebRtcPeerSendrecv(options,
       error => {
         if (error) {
           return console.log(error);
         }
-        this.webRtcPeer.generateOffer(this.onOfferCall);
+        this.webRtcPeer.generateOffer(this.onOfferCall.bind(this));
       });
   }
   onOfferCall(error, offerSdp) {
@@ -275,9 +275,7 @@ export class WebrtcserviceService {
       id : 'onIceCandidate',
       candidate : candidate
     };
-     const jsonMessage = JSON.stringify(message);
-     console.log('Sending message: ' + jsonMessage);
-     this.getWebSocket().send(jsonMessage);
+    this.sendMessage(message);
   }
 
 
