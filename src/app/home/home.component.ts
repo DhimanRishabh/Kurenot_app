@@ -1,9 +1,319 @@
 import {AfterViewInit, Component, ElementRef, Input, OnDestroy, OnInit, Renderer2, ViewChild} from '@angular/core';
 import {WebrtcserviceService} from '../webrtcservice.service';
-import {NOT_REGISTERED, REGISTERED, REGISTERING} from '../appconstants';
 import {WebRtcPeer} from 'kurento-utils';
+import {passBoolean} from 'protractor/built/util';
+import {Subject} from 'rxjs';
+
+let ws = new WebSocket('wss://' + location.host + '/call');
+let disableButtonCall =false;
+let disableButtonTerminate =false;
+let disableButtonRegister = false;
+let webRtcPeer;
+let response;
+let callerMessage;
+let from;
+let nameid;
+let peerid;
+let registerName = null;
+let registerState = null;
+let videoInput;
+let videoOutput;
+const NOT_REGISTERED = 0;
+const REGISTERING = 1;
+const REGISTERED = 2;
+
+function setRegisterState(nextState) {
+
+  switch (nextState) {
+    case NOT_REGISTERED:
+      disableButtonCall = false;
+      localStorage.setItem('disableButtonCall', 'false');
+      setCallState(NO_CALL);
+      break;
+    case REGISTERING:
+      localStorage.setItem('disableButtonRegister', 'true');
+      disableButtonRegister = true;
+      break;
+    case REGISTERED:
+      localStorage.setItem('disableButtonRegister', 'true');
+      disableButtonRegister = true;
+      setCallState(NO_CALL);
+      break;
+    default:
+      return;
+  }
+  registerState = nextState;
+}
+
+let callState = null;
+const NO_CALL = 0;
+const PROCESSING_CALL = 1;
+const IN_CALL = 2;
+
+function setCallState(nextState) {
+  switch (nextState) {
+    case NO_CALL:
+      localStorage.setItem('disableButtonCall', 'true');
+      localStorage.setItem('disableButtonTerminate', 'false');
+      disableButtonCall = true;
+      disableButtonTerminate = false;
+      // this.disableButton(this.play);
+      break;
+    case PROCESSING_CALL:
+      localStorage.setItem('disableButtonCall', 'true');
+      localStorage.setItem('disableButtonTerminate', 'true');
+      disableButtonCall = true;
+      disableButtonTerminate = true;
+      // this.disableButton(this.play);
+      break;
+    case IN_CALL:
+      localStorage.setItem('disableButtonCall', 'false');
+      localStorage.setItem('disableButtonTerminate', 'true');
+      disableButtonCall = false;
+      disableButtonTerminate = true;
+      // this.disableButton(this.play);
+      break;
+    default:
+      return;
+  }
+  callState = nextState;
+}
+
+// tslint:disable-next-line:only-arrow-functions
+window.onload = function() {
+  setRegisterState(NOT_REGISTERED);
+  document.getElementById('name').focus();
+}
+
+window.onbeforeunload = () => {
+  ws.close();
+}
+
+ws.onmessage = message => {
+  const parsedMessage = JSON.parse(message.data);
+  console.log('Received message: ' + message.data);
+
+  switch (parsedMessage.id) {
+    case 'registerResponse':
+      registerResponse(parsedMessage);
+      break;
+    case 'callResponse':
+      callResponse(parsedMessage);
+      break;
+    case 'incomingCall':
+      incomingCall(parsedMessage);
+      break;
+    case 'startCommunication':
+      startCommunication(parsedMessage);
+      break;
+    case 'stopCommunication':
+      console.log('Communication ended by remote peer');
+      stop(true);
+      break;
+    case 'iceCandidate':
+      webRtcPeer.addIceCandidate(parsedMessage.candidate, error => {
+        if (error) {
+          return console.log('Error adding candidate: ' + error);
+        }
+      });
+      break;
+    default:
+      console.log('Unrecognized message', parsedMessage);
+  }
+}
+
+function registerResponse(message) {
+  if (message.response === 'accepted') {
+    setRegisterState(REGISTERED);
+  } else {
+    setRegisterState(NOT_REGISTERED);
+    const errorMessage = message.message ? message.message
+      : 'Unknown reason for register rejection.';
+    console.log(errorMessage);
+    alert('Error registering user. See console for further information.');
+  }
+}
+
+function callResponse(message) {
+  if (message.response !== 'accepted') {
+    console.log('Call not accepted by peer. Closing call');
+    const errorMessage = message.message ? message.message
+      : 'Unknown reason for call rejection.';
+    console.log(errorMessage);
+    // @ts-ignore
+    stop();
+  } else {
+    setCallState(IN_CALL);
+    webRtcPeer.processAnswer(message.sdpAnswer, error => {
+      if (error) {
+        return console.log(error);
+      }
+    });
+  }
+}
+
+function startCommunication(message) {
+  setCallState(IN_CALL);
+  webRtcPeer.processAnswer(message.sdpAnswer, error => {
+    if (error) {
+      return console.log(error);
+    }
+  });
+}
+
+function incomingCall(message) {
+  // If bussy just reject without disturbing user
+  if (callState !== NO_CALL) {
+    let response = {
+      id : 'incomingCallResponse',
+      from : message.from,
+      callResponse : 'reject',
+      message : 'bussy'
+    };
+    return sendMessage(response);
+  }
+
+  setCallState(PROCESSING_CALL);
+  if (confirm('User ' + message.from
+    + ' is calling you. Do you accept the call?')) {
+
+    from = message.from;
+    let options = {
+      localVideo : videoInput,
+      remoteVideo :videoOutput,
+      onicecandidate : onIceCandidate,
+      onerror : onError
+    }
+    webRtcPeer = WebRtcPeer.WebRtcPeerSendrecv(options,
+      error => {
+        if (error) {
+          return console.log(error);
+        }
+        webRtcPeer.generateOffer(onOfferIncomingCall);
+      });
+
+  } else {
+    let response = {
+      id : 'incomingCallResponse',
+      from : message.from,
+      callResponse : 'reject',
+      message : 'user declined'
+    };
+    sendMessage(response);
+    // @ts-ignore
+    stop();
+  }
+}
+
+function onOfferIncomingCall(error, offerSdp) {
+  if (error)
+    return console.log('Error generating the offer');
+  // tslint:disable-next-line:no-shadowed-variable
+  let response = {
+    id : 'incomingCallResponse',
+    from : from,
+    callResponse : 'accept',
+    sdpOffer : offerSdp
+  };
+  sendMessage(response);
+}
+
+function register() {
+  let name = nameid.value;
+  if (name === '') {
+    window.alert('You must insert your user name');
+    return;
+  }
+  setRegisterState(REGISTERING);
+
+  let message = {
+    id : 'register',
+    name : name
+  };
+  sendMessage(message);
+  document.getElementById('peer').focus();
+}
+
+function call() {
+  if (peerid.value === '') {
+    window.alert('You must specify the peer name');
+    return;
+  }
+  setCallState(PROCESSING_CALL);
 
 
+  let options = {
+    localVideo : videoInput,
+    remoteVideo : videoOutput,
+    onicecandidate : onIceCandidate,
+    onerror : onError
+  }
+  webRtcPeer = WebRtcPeer.WebRtcPeerSendrecv(options,
+    error => {
+      if (error) {
+        return console.log(error);
+      }
+      webRtcPeer.generateOffer(onOfferCall);
+    });
+}
+
+function onOfferCall(error, offerSdp) {
+  if (error) {
+    return console.error('Error generating the offer');
+  }
+  console.log('Invoking SDP offer callback function');
+  let message = {
+    id : 'call',
+    from : nameid.value,
+    to : peerid.value,
+    sdpOffer : offerSdp
+  };
+  sendMessage(message);
+}
+
+function stop(message) {
+  setCallState(NO_CALL);
+  if (webRtcPeer) {
+    webRtcPeer.dispose();
+    webRtcPeer = null;
+
+    if (!message) {
+      let message = {
+        id : 'stop'
+      }
+      sendMessage(message);
+    }
+  }
+
+}
+
+function onError() {
+  setCallState(NO_CALL);
+}
+
+function onIceCandidate(candidate) {
+  console.log('Local candidate' + JSON.stringify(candidate));
+
+  let message = {
+    id : 'onIceCandidate',
+    candidate : candidate
+  };
+  sendMessage(message);
+}
+
+function sendMessage(message) {
+  let jsonMessage = JSON.stringify(message);
+  console.log('Sending message: ' + jsonMessage);
+  ws.send(jsonMessage);
+}
+
+
+
+
+
+/**
+ * Lightbox utility (to display media pipeline image in a modal dialog)
+ */
 
 
 @Component({
@@ -11,348 +321,57 @@ import {WebRtcPeer} from 'kurento-utils';
   templateUrl: './home.component.html',
   styleUrls: ['./home.component.css']
 })
-export class HomeComponent implements OnInit , OnDestroy , AfterViewInit{
+export class HomeComponent implements OnInit , OnDestroy {
+  disableButtonCall1 =false;
+  disableButtonTerminate1=false;
+  disableButtonRegister1 = false;
+  disableButtonCallsubject = new Subject();
+  disableButtonTerminatesubject = new Subject();
+  disableButtonRegistersubject = new Subject();
 
-  constructor() { }
-  @ViewChild('register') register: ElementRef;
-  @ViewChild('call') call: ElementRef;
-  @ViewChild('terminate') terminate: ElementRef;
-  @ViewChild('play') play: ElementRef;
-  @ViewChild('name') nameid: ElementRef;
-  @ViewChild('peer') peerid: ElementRef;
-  @ViewChild('videoInput') videoInput: ElementRef;
-  @ViewChild('videoOutput') videoOutput: ElementRef;
-  disableButtonCall: boolean;
-  disableButtonTerminate: boolean;
-  private jsonMessage: string;
-  private message;
-  name: string;
-  ws: any;
-  NOT_REGISTERED = 0;
-  registerState = null;
-  NO_CALL = 0;
-  callState = null;
-  PROCESSING_CALL = 1;
-  IN_CALL = 2;
-  disableButtonRegister = false;
+
   enableButtonCall = false;
-  parsedMessage;
-  errorMessage: any;
-  response: any;
-  options: any;
-  from: any;
-  webRtcPeer: any;
+
+  constructor(private webrtcserviceService: WebrtcserviceService) {
+  }
+
+  @ViewChild('register',{ static: true }) registerid: ElementRef;
+  @ViewChild('call',{ static: true }) callid: ElementRef;
+  @ViewChild('terminate',{ static: true }) terminateid: ElementRef;
+  @ViewChild('play',{ static: true }) playid: ElementRef;
+  @ViewChild('name',{ static: true }) nameid: ElementRef;
+  @ViewChild('peer',{ static: true }) peerid: ElementRef;
+  @ViewChild('videoInput',{ static: true }) videoInput: ElementRef;
+  @ViewChild('videoOutput',{ static: true }) videoOutput: ElementRef;
+
   ngOnInit(): void {
-
+    videoInput = this.videoInput.nativeElement;
+    videoOutput = this.videoOutput.nativeElement;
+    nameid = this.nameid.nativeElement;
+    peerid = this.peerid.nativeElement;
   }
+
+
   ngOnDestroy(): void {
-    this.ws.close();
-  }
-  startCommunication(message) {
-    this.setCallState(this.IN_CALL);
-    this.webRtcPeer.processAnswer(message.sdpAnswer, error => {
-      if (error) {
-        return console.error(error);
-      }
-    });
+   }
+  callFn(){
+    call();
+    this.updateButton();
   }
 
-  setRegisterState(nextState: number) {
-    switch (nextState) {
-      case NOT_REGISTERED:
-        this.disableButtonRegister = false;
-        this.setCallState(this.NO_CALL);
-        break;
-      case REGISTERING:
-        this.disableButtonRegister = true;
-        break;
-      case REGISTERED:
-        this.disableButtonRegister = true;
-        this.setCallState(this.NO_CALL);
-        break;
-      default:
-        return;
-    }
-    this.registerState = nextState;
+  stop(b: boolean) {
+    stop(b);
+    this.updateButton();
   }
-
-  setCallState(nextState) {
-    switch (nextState) {
-      case this.NO_CALL:
-        this.disableButtonCall = true;
-        this.disableButtonTerminate = false;
-        // this.disableButton(this.play);
-        break;
-      case this.PROCESSING_CALL:
-        this.disableButtonCall = true;
-        this.disableButtonTerminate = true;
-        // this.disableButton(this.play);
-        break;
-      case this.IN_CALL:
-        this.disableButtonCall = false;
-        this.disableButtonTerminate = true;
-        // this.disableButton(this.play);
-        break;
-      default:
-        return;
-    }
-    this.callState = nextState;
-  }
-
-
-
-  ngAfterViewInit(): void {
-    this.ws = new WebSocket('wss://' + location.host + '/call');
-    this.ws.onmessage = message => {
-      this.parsedMessage = JSON.parse(message.data);
-      console.log('Received message: ' + message.data);
-      switch (this.parsedMessage.id) {
-        case 'registerResponse':
-          this.registerResponse(this.parsedMessage);
-          break;
-        case 'callResponse':
-          this.callResponse(this.parsedMessage);
-          break;
-        case 'incomingCall':
-          this.incomingCall(this.parsedMessage);
-          break;
-        case 'startCommunication':
-          this.startCommunication(this.parsedMessage);
-          break;
-        case 'stopCommunication':
-          console.log('Communication ended by remote peer');
-          this.stop(true);
-          break;
-        case 'iceCandidate':
-          this.webRtcPeer.addIceCandidate(this.parsedMessage.candidate, error => {
-            if (error) {
-              return console.error('Error adding candidate: ' + error);
-            }
-          });
-          break;
-        default:
-          console.error('Unrecognized message', this.parsedMessage);
-      }
-
-    };
-    console.log(this.register);
-    this.setRegisterState(NOT_REGISTERED);
-  }
-  registerResponse(message) {
-
-    if (message.response === 'accepted') {
-     this. setRegisterState(REGISTERED);
-    } else {
-     this. setRegisterState(NOT_REGISTERED);
-     this.errorMessage = message.message ? message.message
-        : 'Unknown reason for register rejection.';
-     console.log(this.errorMessage);
-     alert('Error registering user. See console for further information.');
-    }
-  }
-  callResponse(message) {
-    if (message.response !== 'accepted') {
-      console.log('Call not accepted by peer. Closing call');
-      this.errorMessage = message.message ? message.message
-        : 'Unknown reason for call rejection.';
-      console.log(this.errorMessage);
-      this.stop(false);
-    } else {
-      this.setCallState(this.IN_CALL);
-      this.webRtcPeer.processAnswer(message.sdpAnswer, error => {
-        if (error) {
-          return console.error(error);
-        }
-      });
-    }
-  }
-  incomingCall(message) {
-    // If bussy just reject without disturbing user
-    if (this.callState !== this.NO_CALL) {
-       this.response = {
-        id : 'incomingCallResponse',
-        from : message.from,
-        callResponse : 'reject',
-        message : 'bussy'
-      };
-       return this.sendMessage(this.response);
-    }
-
-    this.setCallState(this.PROCESSING_CALL);
-    if (confirm('User ' + message.from
-      + ' is calling you. Do you accept the call?')) {
-      /*this.showSpinner(videoInput, videoOutput);
-*/
-      this.options = {
-        localVideo : this.videoInput.nativeElement,
-        remoteVideo : this.videoOutput.nativeElement,
-        onicecandidate : (candidate) => {
-        console.log('Local candidate' + JSON.stringify(candidate));
-        this.message = {
-          id : 'onIceCandidate',
-          candidate : candidate
-        };
-        this.sendMessage(this.message);
-      },
-        onerror : () => {
-          this.setCallState(this.NO_CALL);
-    }
-      };
-
-
-      this.webRtcPeer = WebRtcPeer.WebRtcPeerSendrecv( this.options,
-         error => {
-           if (error) {
-            return console.error(error);
-           }
-         });
-      this.webRtcPeer.generateOffer((error, offerSdp) => {
-        if (error) {
-          return console.error('Error generating the offer');
-        }
-        this.response = {
-          id : 'incomingCallResponse',
-          from : message.from,
-          callResponse : 'accept',
-          sdpOffer : offerSdp
-        };
-        this.sendMessage(this.response);
-      });
-    } else {
-      this.response = {
-        id : 'incomingCallResponse',
-        from : message.from,
-        callResponse : 'reject',
-        message : 'user declined'
-      };
-      this.sendMessage(this.response);
-      this.stop(false);
-    }
-  }
-
-  callFN() {
-    if (this.peerid.nativeElement.value === '') {
-      window.alert('You must specify the peer name');
-      return;
-    }
-    this.setCallState(this.PROCESSING_CALL);
-
-    this.options = {
-      localVideo : this.videoInput.nativeElement,
-      remoteVideo : this.videoOutput.nativeElement,
-      onicecandidate : (candidate) => {
-      console.log('Local candidate' + JSON.stringify(candidate));
-
-      this.message = {
-        id : 'onIceCandidate',
-        candidate : candidate
-      };
-      this.sendMessage(this.message);
-    },
-      onerror : () => {
-      this.setCallState(this.NO_CALL);
-    }
-    }
-    // @ts-ignore
-    this.webRtcPeer =  new WebRtcPeer.WebRtcPeerSendrecv( this.options,
-      error => {
-        if (error) {
-          return console.log(error);
-        }
-      });
-    this.webRtcPeer.generateOffer((error, offerSdp) => {
-      if (error) {
-        return console.error('Error generating the offer');
-      }
-      console.log('Invoking SDP offer callback function');
-      this.message = {
-        id : 'call',
-        from : this.nameid.nativeElement.value,
-        to : this.peerid.nativeElement.value,
-        sdpOffer : offerSdp
-      };
-      this.sendMessage(this.message);
-    });
-  }
-
-
-  /*onOfferCall(error, offerSdp) {
-    if (error) {
-      return console.error('Error generating the offer');
-    }
-    console.log('Invoking SDP offer callback function');
-    this.message = {
-      id : 'call',
-      from : this.nameid.nativeElement.value,
-      to : this.peerid.nativeElement.value,
-      sdpOffer : offerSdp
-    };
-    this.sendMessage(this.message);
-  }*/
-  stop(message) {
-    this.setCallState(this.NO_CALL);
-    if (this.webRtcPeer) {
-      this.webRtcPeer.dispose();
-      this.webRtcPeer = null;
-
-      if (!message) {
-        this.message = {
-          id : 'stop'
-        };
-        this.sendMessage(this.message);
-      }
-    }
-    // hideSpinner(videoInput, videoOutput);
-  }
-
-
- /* onOfferIncomingCall(error, offerSdp) {
-    if (error) {
-      return console.error('Error generating the offer');
-    }
-    this.response = {
-      id : 'incomingCallResponse',
-      from : this.from,
-      callResponse : 'accept',
-      sdpOffer : offerSdp
-    };
-    this.sendMessage(this.response);
-  }*/
-  sendMessage(message) {
-    this.jsonMessage = JSON.stringify(message);
-    console.log('Sending message: ' + this.jsonMessage);
-    this.ws.send(this.jsonMessage);
-  }
-
- /* onIceCandidate(candidate) {
-    console.log('Local candidate' + JSON.stringify(candidate));
-
-    this.message = {
-      id : 'onIceCandidate',
-      candidate : candidate
-    };
-    this.sendMessage(this.message);
-  }*/
-  /*onError() {
-    this.setCallState(this.NO_CALL);
-  }*/
 
   registerFN() {
-    this.name = this.nameid.nativeElement.value;
-    console.log(this.nameid.nativeElement.value)
-    if (this.name === '') {
-      window.alert('You must insert your user name');
-      return;
-    }
-    this.setRegisterState(REGISTERING);
-
-    this. message = {
-      id : 'register',
-      name: this.name
-    };
-    this.sendMessage(this.message);
-  /* document.getElementById('peer').focus();*/
+    register();
+    this.updateButton();
   }
 
-
+  updateButton(){
+    this.disableButtonCall1 = Boolean(localStorage.getItem('disableButtonCall'));
+    this.disableButtonTerminate1 = Boolean(localStorage.getItem('disableButtonTerminate'));
+    this.disableButtonRegister1 = Boolean(localStorage.getItem('disableButtonRegister'));
+  }
 }
